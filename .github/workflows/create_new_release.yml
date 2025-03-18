@@ -1,0 +1,121 @@
+name: Create New Release
+run-name: ${{ github.event.head_commit.message }}
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'
+jobs:
+  check-for-new-commit:
+    name: Check For New Commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+
+      - name: Pull repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pull fresh commit hash from PortSwigger/turbo-intruder
+        run: echo "latest_hash=$(git ls-remote https://github.com/PortSwigger/turbo-intruder -h HEAD)" >> "$GITHUB_ENV"
+
+      - name: Compare hashes and set env variable
+        run: |
+          if [[ "$(cat latest_commit_hash.txt)" != "$latest_hash" ]]; then
+            echo "CREATE_NEW_RELEASE=true" >> "$GITHUB_ENV"
+            echo "GIT_COMMIT_NEW_HASH=true" >> "$GITHUB_ENV"
+            echo -e "::notice::NEW RELEASE WILL BE PUBLISHED 🚀 (Latest commit hash is different.)"
+          elif [[ -z "$(git tag --list)" ]]; then
+            echo "CREATE_NEW_RELEASE=true" >> "$GITHUB_ENV"
+            echo -e "::notice::NEW RELEASE WILL BE PUBLISHED 🚀 (No current release found in repo)"
+          else
+            echo "CREATE_NEW_RELEASE=false" >> "$GITHUB_ENV"
+            echo "::warning::NEW RELEASE WILL NOT BE PUBLISHED ⚠️  (Latest commit hash matches saved hash.)"
+          fi
+
+      - name: Save and upload new hash file
+        if: ${{ env.GIT_COMMIT_NEW_HASH == 'true' }}
+        run: |
+          echo "$latest_hash" > latest_commit_hash.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest_commit_hash.txt
+          git commit -m "updated commit hash"
+          git push
+      
+      - name: Output hash check for later jobs
+        id: hash_check
+        run: echo "CREATE_NEW_RELEASE=$CREATE_NEW_RELEASE" >> "$GITHUB_OUTPUT"
+    outputs:
+      CREATE_NEW_RELEASE: ${{ steps.hash_check.outputs.CREATE_NEW_RELEASE }}
+
+  build-turbo-intruder-jar:
+    name: Build turbo-intruder.jar
+    needs: check-for-new-commit
+    if: needs.check-for-new-commit.outputs.CREATE_NEW_RELEASE == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull turbo-intruder repository
+        uses: actions/checkout@v4
+        with:
+          repository: 'PortSwigger/turbo-intruder'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build turbo-intruder.jar
+        run: ./gradlew build fatjar
+
+      - name: Upload turbo-intruder.jar as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbo-intruder.jar
+          path: build/libs/turbo-intruder.jar
+
+  test-turbo-intruder-jar:
+    name: Test turbo-intruder.jar
+    needs: build-turbo-intruder-jar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download turbo-intruder.jar
+        uses: actions/download-artifact@v4
+        with:
+          name: turbo-intruder.jar
+          path: .
+
+      - name: Pull repo
+        uses: actions/checkout@v4
+
+      - name: Run test suite
+        run: |
+          echo TODO
+          echo "TESTS_PASSED=true" >> "$GITHUB_ENV"
+
+      - name: Output test suite check for next job
+        id: tests_passed
+        run: echo "TESTS_PASSED=$TESTS_PASSED" >> "$GITHUB_OUTPUT"
+    outputs:
+      TESTS_PASSED: ${{ steps.tests_passed.outputs.TESTS_PASSED }}
+
+  publish-new-release:
+    name: Publish new release
+    needs: test-turbo-intruder-jar
+    if: needs.test-turbo-intruder-jar.outputs.TESTS_PASSED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download turbo-intruder.jar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: turbo-intruder.jar
+          path: .
+
+      - name: Create new release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: turbo-intruder.jar
+          fail_on_unmatched_files: true
+          tag_name: turbo-intruder.jar
