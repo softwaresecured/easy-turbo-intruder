@@ -3,7 +3,7 @@ run-name: ${{ github.event.head_commit.message }}
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '25 8 * * *'
 jobs:
   check-for-new-commit:
     name: Check For New Commit
